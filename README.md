@@ -10,10 +10,10 @@ Cкрипт для сборки прошивки для ESP8266 с помощь�
 
 ### Зависимости
 Для работы скрипта необходимы:
-* ```[PlatformIO](https://platformio.org/)``` и настроеный проект
-* ```[mkspiffs](https://github.com/igrr/mkspiffs/releases)``` [GitHub](https://github.com/igrr/mkspiffs)
-* ```[esptool](https://github.com/espressif/esptool)```
-* ```[pyserial](https://pythonhosted.org/pyserial/tools.html#miniterm)```
+* [PlatformIO](https://platformio.org/) и настроеный проект
+* [mkspiffs](https://github.com/igrr/mkspiffs/releases) [GitHub](https://github.com/igrr/mkspiffs)
+* [esptool](https://github.com/espressif/esptool)
+* [pyserial](https://pythonhosted.org/pyserial/tools.html#miniterm)
 
 ### Использование
 
