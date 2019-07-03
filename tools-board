@@ -1,0 +1,290 @@
+#!/bin/bash
+# Адрес с которого начинается SPIFFS
+SPIFFS_START_ADDRESS=0x300000                              # Изменяемый параметр
+# Адрес с завершения SPIFFS
+SPIFFS_END_ADDRESS=0x3FB000                                # Изменяемый параметр
+SPIFFS_PAGE=256                                            # Изменяемый параметр
+SPIFFS_BLOCK=8192                                          # Изменяемый параметр
+# Скрипт необходимо расположить в каталоге проекта
+PROJECT_FOLDER="$(pwd)"                                    # Изменяемый параметр
+# Задаем переменне среды сборки
+export PATH=$PATH:/home/work/.platformio/penv/bin          # Изменяемый параметр
+export PATH=$PATH:/home/work/.platformio/penv              # Изменяемый параметр
+PLATFORMIO="platformio"                                    # Изменяемый параметр
+# Где находится файл прошивки формируемый PlatformIO
+BIN=".pioenvs/nodemcuv2/firmware.bin"                      # Изменяемый параметр
+# Модель микроконотроллера
+V="ESP8266"                                                # Изменяемый параметр
+# путь к файлу прошики
+FIRMWARE="$PROJECT_FOLDER/$BIN"
+# Формируем дату, для использования в имени файла прошивки и SPIFFS
+DT=$(date +'%Y-%m-%d-%H-%M-%S')
+# Формируем имя файла прошивки
+FIRMWARE_NAME="$V-FIRMWARE-$DT.bin"
+# Где будет распологаться конечный файл прошивки
+OUT_FOLDER="$PROJECT_FOLDER/bin"
+# Путь к конечному файлу прошивки
+FIRMWARE_OUT="$OUT_FOLDER/$FIRMWARE_NAME"
+# Где распологается утилита mkspiffs для сборки файловой системы SPIFFS
+MKSPIFFS="/usr/local/bin/mkspiffs-esp8266"                 # Изменяемый параметр
+# Где распологается утилита esptool для прошивки ESP8266 и загрузки SPIFFS
+ESPTOOL="/usr/local/bin/esptool.py"                        # Изменяемый параметр
+# Формируем имя файла внутренней файловой системы
+SPIFFS_FILE="$V-SPIFFS-$DT.bin"
+SPIOUT="$OUT_FOLDER/$SPIFFS_FILE"
+# Настройка для работы монитора UART с помощью pyserial
+PYTHON="/usr/bin/python3 -m"                               # Изменяемый параметр
+# Утилита Python для работы с COM портром
+SERIAL="serial.tools.miniterm"                             # Изменяемый параметр
+# Скорость на которой будет работать COM порт в режиме мониторинга
+SERIAL_SPEED=115200                                        # Изменяемый параметр
+
+# Если не передан третий параметр, ESP8266 подключен к ttyUSB0
+if [ -z $3 ] ; then n="0"
+    else n=$3
+fi
+# Имя COM порта к которому подключен микроконтроллер
+SERIAL_PORT="/dev/ttyUSB$n"                                # Изменяемый параметр
+RESET_METHOD="nodemcu"                                     # Изменяемый параметр
+# Настройка скорости COM порта для загрузки прошивки
+UPLOAD_SPEED=460800                                        # Изменяемый параметр
+
+# Проверяем имеется ли в каталоге проекта каталог 'bin' где будут 
+# находиться все прошивки и SPIFFS
+# Если каталога нет, создаем его
+# Проверяем имеется ли файл .gitignore, если нет, создаем его и заносим исключение
+# Если файл имеется, проверяем имеется ли исключение игнорировать каталог bin, 
+# если исключение нет добавляем его
+check_bin() {
+cd $PROJECT_FOLDER
+if [[ -d bin ]]; then
+    echo "################################################"
+    echo "########### Каталог 'bin' существует ###########"
+else
+    mkdir bin
+    if [[ -d bin ]]; then
+        echo "############# Каталог 'bin' не существует, создаем его ##########"
+        echo $(ls -l | grep bin$)
+    else
+        echo "###### Ошибка при создании каталога 'bin' ######"
+        exit 1
+    fi
+fi
+if [[ -f .gitignore ]]; then
+    echo "###### Файл '.gitignore' в проекте имеется ######"
+    if [[ $(cat .gitignore | grep ^bin$) != bin ]]; then
+        echo "bin" >> .gitignore
+        echo "###### Создано исключение в файле '.gitignore' ######"
+    fi
+else
+    echo "###### Файл '.gitignore' не существует, создаем его ######"
+    : > .gitignore
+    echo $(ls -la | grep gitignore$)
+    echo "bin" >> .gitignore
+    echo "###### Создано исключение в файле '.gitignore' ######"
+fi
+}
+
+# Очистка проекта
+clean_project() {
+cd $PROJECT_FOLDER
+echo "######################### CLEAN PROJECT ##############################"
+sleep 1
+$PLATFORMIO run --target clean
+if [[ $? -ne 0 ]]; then
+    echo "########################## Error Clean! #############################"
+    exit 1
+else
+    echo "##################### Clean OLD PROJECT OK! #########################"
+fi
+}
+
+# Сборка прошивки
+project_make() {
+cd $PROJECT_FOLDER
+echo "######################### MAKE PROJECT ###############################"
+sleep 1
+$PLATFORMIO run
+if [[ $? -ne 0 ]]; then
+    echo "######################## ERROR MAKE PROJECT #########################"
+    exit 1
+else
+    cp $BIN $FIRMWARE_OUT
+    echo "################### FINISH MAKE PROJECT OK! #########################"
+fi
+}
+
+# Очистка чипа
+chip_erase() {
+sleep 1
+echo "########################## ERASE FLASH $V ############################"
+esptool.py --port $SERIAL_PORT --baud $UPLOAD_SPEED erase_flash
+if [[ $? -ne 0 ]]; then
+    echo "######################## ERROR ERASE FLASH! #########################"
+    exit 1
+else
+    echo "######################## ERASE FLASH $V OK! #########################"
+fi
+}
+
+# Запись прошивки
+chip_write() {
+sleep 1
+echo "################## UPLOAD THE FIRMWARE INTO THE $V ###################"
+echo "UPLOAD THE FIRMWARE $FIRMWARE_OUT"
+$ESPTOOL --port $SERIAL_PORT --baud $UPLOAD_SPEED write_flash \
+    --flash_size=detect -fm dio 0 $FIRMWARE_OUT
+if [[ $? -ne 0 ]]; then
+    echo "################### ERROR UPLOAD THE FIRMWARE! ######################"
+    exit 1
+fi
+echo "############################ ALL FINISH ##############################"
+}
+
+# Создание образа SPIFFS
+create_spiffs() {
+sleep 1
+echo "###################### CREATE THE SPIFFS FOR $V ######################"
+echo "CREATE FILE $SPIOUT"
+SPIFFS_SIZE=$(($SPIFFS_END_ADDRESS - $SPIFFS_START_ADDRESS))
+$MKSPIFFS -c "${PROJECT_FOLDER}/data" -p "$SPIFFS_PAGE" -b "$SPIFFS_BLOCK" \
+    -s "$SPIFFS_SIZE" "$SPIOUT"
+if [[ $? -ne 0 ]]; then
+    echo "################### ERROR CREATE FILE SPIFFS ########################"
+    exit 1
+fi
+echo "################ FINISH CREATE FILE $SPIOUT #####################"
+}
+
+# Запись образа SPIFFS
+write_spiffs() {
+sleep 1
+echo "####################### WRITE THE SPIFFS FOR $V ######################"
+echo "WRITE FILE $SPIOUT"
+$ESPTOOL --port $SERIAL_PORT --baud $UPLOAD_SPEED write_flash \
+    $SPIFFS_START_ADDRESS $SPIOUT
+if [[ $? -ne 0 ]]; then
+    echo "##################### ERROR WRITE SPIFFS FILE #######################"
+    exit 1
+fi
+echo "############## FINISH WRITE THE SPIFFS $SPIOUT ##################"
+}
+
+# Moнитор порта UART
+monitor_board() {
+sleep 1
+echo "########################## MONITOR UART $V ###########################"
+$PYTHON $SERIAL $SERIAL_PORT $SERIAL_SPEED
+}
+
+# Chip ID
+id_board() {
+sleep 1
+echo "############################ ID CHIP $V ##############################"
+$ESPTOOL --port $SERIAL_PORT --baud $UPLOAD_SPEED chip_id
+if [[ $? -ne 0 ]]; then
+    echo "######################### ERROR ID CHIP $V ##########################"
+    exit 1
+fi
+echo "############################ ID CHIP $V ##############################"
+}
+
+# Flash ID
+flash_board() {
+sleep 1
+echo "############################ ID FLASH $V #############################"
+$ESPTOOL --port $SERIAL_PORT --baud $UPLOAD_SPEED flash_id
+if [[ $? -ne 0 ]]; then
+    echo "######################## ERROR ID FLASH $V ##########################"
+    exit 1
+fi
+echo "############################ ID FLASH $V #############################"
+}
+
+# MAC INFO
+mac_board() {
+sleep 1
+echo "############################ MAC INFO $V #############################"
+$ESPTOOL --port $SERIAL_PORT --baud $UPLOAD_SPEED read_mac
+if [[ $? -ne 0 ]]; then
+    echo "######################## ERROR MAC INFO $V ##########################"
+    exit 1
+fi
+echo "############################ MAC INFO $V #############################"
+}
+
+case $1 in
+     "-id" )
+          id_board        # Chip ID
+          ;;
+     "-fl" )
+          flash_board     # Flash ID
+          ;;
+     "-mac" )
+          mac_board       # MAC INFO
+          ;;
+     "-e" )
+          chip_erase      # Очистка чипа
+          ;;
+     "-c" )
+          check_bin
+          clean_project   # Очистка проекта
+          ;;
+     "-m" )
+          project_make   # Сборка прошивки
+          ;;
+     "-mf" )
+          check_bin
+          create_spiffs   # Создание образа SPIFFS
+          ;;
+     "-ow" )
+          check_bin
+          FIRMWARE_OUT=$2    # Только Запись прошивки
+          echo "UPLOAD FIRMWARE $FIRMWARE_OUT"
+          chip_write
+          ;;
+     "-owf" )
+          check_bin
+          SPIOUT=$2    # Только Запись образа SPIFFS
+          echo "UPLOAD SPIFFS $SPIOUT"
+          write_spiffs
+          ;;
+     "-mw" )
+          check_bin
+          project_make   # Сборка прошивки
+          echo "UPLOAD FIRMWARE $FIRMWARE_OUT"
+          chip_write     # Запись прошивки
+          ;;
+      "-mwf" )
+          check_bin
+          create_spiffs   # Создание образа SPIFFS
+          echo "UPLOAD SPIFFS $SPIOUT"
+          write_spiffs    # Запись образа SPIFFS
+          ;;
+       "-mb" )
+          monitor_board   # Moнитор порта UART
+          ;;
+       "-h" )
+          echo "############################ HELP #############################"
+          echo "$0 -mb  | Moнитор порта UART"
+          echo "$0 -c   | Очистака проекта"
+          echo "$0 -m   | Сборка прошивки"
+          echo "$0 -e   | Очистка $V"
+          echo "$0 -mf  | Сборка образа SPIFFS"
+          echo "$0 -mw  | Cборка прошивки, запись прошивки"
+          echo "$0 -owf | Только запись образа SPIFFS, необходимо передать имя образа SPIFFS"
+          echo "$0 -ow  | Только запись прошивки, необходимо передать имя прошивки"
+          echo "$0 -mwf | Cборка образа SPIFFS и его запись"
+          echo "$0 -id  | Информация об ID $V"
+          echo "$0 -mac | MAC адрес $V"
+          echo "$0 -fl  | ID Flash $V"
+          echo "$0 -h   | Справка по работе со скриптом"
+          echo "###############################################################"
+          ;;
+     *)
+          echo "###############################################################"
+          echo "Для получения информации по работе со скриптом $0 -h"
+          echo "###############################################################"
+          ;;
+esac
+
